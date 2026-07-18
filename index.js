@@ -1,6 +1,6 @@
 const express = require('express');
 const app = express();
-__path = process.cwd()
+__path = process.cwd();
 const bodyParser = require("body-parser");
 const PORT = process.env.PORT || 8000;
 require('events').EventEmitter.defaultMaxListeners = 500;
@@ -12,11 +12,11 @@ let code = require('./pair');
 app.use('/code', code);
 
 app.use('/', async (req, res, next) => {
-    res.sendFile(__path + '/pair.html')
+    res.sendFile(__path + '/pair.html');
 });
 
 app.listen(PORT, () => {
-    console.log(`⏩ Server running on http://localhost:` + PORT)
+    console.log(`⏩ Server running on http://localhost:` + PORT);
 });
 
 module.exports = app;
