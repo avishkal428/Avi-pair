@@ -21,7 +21,7 @@ function removeFile(FilePath) {
 router.get('/', async (req, res) => {
     let num = req.query.number;
     async function PrabathPair() {
-        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
+        const { state, saveCreds } = await useMultiFileAuthState(`./session/${num}`);
         try {
             let PrabathPairWeb = makeWASocket({
                 auth: {
@@ -48,28 +48,27 @@ router.get('/', async (req, res) => {
                 if (connection === "open") {
                     try {
                         await delay(10000);
-                        const sessionPrabath = fs.readFileSync('./session/creds.json');
+                        const sessionPrabath = fs.readFileSync(`./session/${num}/creds.json`);
 
-                        const auth_path = './session/';
+                        const auth_path = `./session/${num}/`;
                         const user_jid = jidNormalizedUser(PrabathPairWeb.user.id);
 
-                      function randomMegaId(length = 6, numberLength = 4) {
-                      const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                      let result = '';
-                      for (let i = 0; i < length; i++) {
-                      result += characters.charAt(Math.floor(Math.random() * characters.length));
-                        }
-                       const number = Math.floor(Math.random() * Math.pow(10, numberLength));
-                        return `${result}${number}`;
+                        function randomMegaId(length = 6, numberLength = 4) {
+                            const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                            let result = '';
+                            for (let i = 0; i < length; i++) {
+                                result += characters.charAt(Math.floor(Math.random() * characters.length));
+                            }
+                            const number = Math.floor(Math.random() * Math.pow(10, numberLength));
+                            return `${result}${number}`;
                         }
 
                         const mega_url = await upload(fs.createReadStream(auth_path + 'creds.json'), `${randomMegaId()}.json`);
 
                         const string_session = mega_url.replace('https://mega.nz/file/', '');
-
                         const sid = string_session;
 
-                        const dt = await PrabathPairWeb.sendMessage(user_jid, {
+                        await PrabathPairWeb.sendMessage(user_jid, {
                             text: sid
                         });
 
@@ -78,18 +77,18 @@ router.get('/', async (req, res) => {
                     }
 
                     await delay(100);
-                    return await removeFile('./session');
-                    process.exit(0);
+                    return await removeFile(`./session/${num}`);
+
                 } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== 401) {
                     await delay(10000);
                     PrabathPair();
                 }
             });
         } catch (err) {
-            exec('pm2 restart prabath-md');
+            exec('pm2 restart prabath');
             console.log("service restarted");
             PrabathPair();
-            await removeFile('./session');
+            await removeFile(`./session/${num}`);
             if (!res.headersSent) {
                 await res.send({ code: "Service Unavailable" });
             }
@@ -102,6 +101,5 @@ process.on('uncaughtException', function (err) {
     console.log('Caught exception: ' + err);
     exec('pm2 restart prabath');
 });
-
 
 module.exports = router;
