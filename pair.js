@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs');
-const { exec } = require("child_process");
-let router = express.Router()
+let router = express.Router();
 const pino = require("pino");
 const {
     default: makeWASocket,
@@ -19,9 +18,10 @@ function removeFile(FilePath) {
 }
 
 router.get('/', async (req, res) => {
-    let num = req.query.number;
+    let num = req.query.number.replace(/[^0-9]/g, ''); // ✅ First clean the number
+
     async function PrabathPair() {
-        const { state, saveCreds } = await useMultiFileAuthState(`./session/${num}`);
+        const { state, saveCreds } = await useMultiFileAuthState(`/tmp/session/${num}`); // ✅ /tmp for Vercel
         try {
             let PrabathPairWeb = makeWASocket({
                 auth: {
@@ -35,7 +35,6 @@ router.get('/', async (req, res) => {
 
             if (!PrabathPairWeb.authState.creds.registered) {
                 await delay(1500);
-                num = num.replace(/[^0-9]/g, '');
                 const code = await PrabathPairWeb.requestPairingCode(num);
                 if (!res.headersSent) {
                     await res.send({ code });
@@ -48,9 +47,7 @@ router.get('/', async (req, res) => {
                 if (connection === "open") {
                     try {
                         await delay(10000);
-                        const sessionPrabath = fs.readFileSync(`./session/${num}/creds.json`);
-
-                        const auth_path = `./session/${num}/`;
+                        const auth_path = `/tmp/session/${num}/`; // ✅ /tmp for Vercel
                         const user_jid = jidNormalizedUser(PrabathPairWeb.user.id);
 
                         function randomMegaId(length = 6, numberLength = 4) {
@@ -64,7 +61,6 @@ router.get('/', async (req, res) => {
                         }
 
                         const mega_url = await upload(fs.createReadStream(auth_path + 'creds.json'), `${randomMegaId()}.json`);
-
                         const string_session = mega_url.replace('https://mega.nz/file/', '');
                         const sid = string_session;
 
@@ -73,11 +69,11 @@ router.get('/', async (req, res) => {
                         });
 
                     } catch (e) {
-                        exec('pm2 restart prabath');
+                        console.log("Connection error:", e);
                     }
 
                     await delay(100);
-                    return await removeFile(`./session/${num}`);
+                    return await removeFile(`/tmp/session/${num}`); // ✅ /tmp for Vercel
 
                 } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== 401) {
                     await delay(10000);
@@ -85,10 +81,8 @@ router.get('/', async (req, res) => {
                 }
             });
         } catch (err) {
-            exec('pm2 restart prabath');
-            console.log("service restarted");
-            PrabathPair();
-            await removeFile(`./session/${num}`);
+            console.log("service error:", err);
+            await removeFile(`/tmp/session/${num}`); // ✅ /tmp for Vercel
             if (!res.headersSent) {
                 await res.send({ code: "Service Unavailable" });
             }
@@ -99,7 +93,6 @@ router.get('/', async (req, res) => {
 
 process.on('uncaughtException', function (err) {
     console.log('Caught exception: ' + err);
-    exec('pm2 restart prabath');
 });
 
 module.exports = router;
