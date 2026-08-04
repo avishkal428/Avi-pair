@@ -1,98 +1,91 @@
 const express = require('express');
+const router = express.Router();
 const fs = require('fs');
-let router = express.Router();
-const pino = require("pino");
+const pino = require('pino');
 const {
     default: makeWASocket,
     useMultiFileAuthState,
     delay,
     makeCacheableSignalKeyStore,
-    Browsers,
-    jidNormalizedUser
-} = require("@whiskeysockets/baileys");
-const { upload } = require('./mega');
-
-function removeFile(FilePath) {
-    if (!fs.existsSync(FilePath)) return false;
-    fs.rmSync(FilePath, { recursive: true, force: true });
-}
+    Browsers
+} = require('@whiskeysockets/baileys');
 
 router.get('/', async (req, res) => {
-    let num = req.query.number.replace(/[^0-9]/g, ''); // ✅ First clean the number
+    let num = req.query.code;
+    if (!num) return res.json({ error: 'Please enter a valid phone number!' });
 
-    async function PrabathPair() {
-        const { state, saveCreds } = await useMultiFileAuthState(`/tmp/session/${num}`); // ✅ /tmp for Vercel
-        try {
-            let PrabathPairWeb = makeWASocket({
-                auth: {
-                    creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
-                },
-                printQRInTerminal: false,
-                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-                browser: Browsers.macOS("Safari"),
-            });
+    // Phone number sanitization
+    num = num.replace(/[^0-9]/g, '');
 
-            if (!PrabathPairWeb.authState.creds.registered) {
-                await delay(1500);
-                const code = await PrabathPairWeb.requestPairingCode(num);
-                if (!res.headersSent) {
-                    await res.send({ code });
-                }
-            }
+    const authPath = `./session_${Date.now()}`;
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
 
-            PrabathPairWeb.ev.on('creds.update', saveCreds);
-            PrabathPairWeb.ev.on("connection.update", async (s) => {
-                const { connection, lastDisconnect } = s;
-                if (connection === "open") {
-                    try {
-                        await delay(10000);
-                        const auth_path = `/tmp/session/${num}/`; // ✅ /tmp for Vercel
-                        const user_jid = jidNormalizedUser(PrabathPairWeb.user.id);
+    try {
+        let sock = makeWASocket({
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+            },
+            printQRInTerminal: false,
+            logger: pino({ level: "fatal" }),
+            browser: Browsers.macOS("Safari")
+        });
 
-                        function randomMegaId(length = 6, numberLength = 4) {
-                            const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                            let result = '';
-                            for (let i = 0; i < length; i++) {
-                                result += characters.charAt(Math.floor(Math.random() * characters.length));
-                            }
-                            const number = Math.floor(Math.random() * Math.pow(10, numberLength));
-                            return `${result}${number}`;
-                        }
-
-                        const mega_url = await upload(fs.createReadStream(auth_path + 'creds.json'), `${randomMegaId()}.json`);
-                        const string_session = mega_url.replace('https://mega.nz/file/', '');
-                        const sid = string_session;
-
-                        await PrabathPairWeb.sendMessage(user_jid, {
-                            text: sid
-                        });
-
-                    } catch (e) {
-                        console.log("Connection error:", e);
-                    }
-
-                    await delay(100);
-                    return await removeFile(`/tmp/session/${num}`); // ✅ /tmp for Vercel
-
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== 401) {
-                    await delay(10000);
-                    PrabathPair();
-                }
-            });
-        } catch (err) {
-            console.log("service error:", err);
-            await removeFile(`/tmp/session/${num}`); // ✅ /tmp for Vercel
+        if (!sock.authState.creds.registered) {
+            await delay(1500);
+            const code = await sock.requestPairingCode(num);
             if (!res.headersSent) {
-                await res.send({ code: "Service Unavailable" });
+                res.send({ code: code?.match(/.{1,4}/g)?.join("-") || code });
             }
         }
-    }
-    return await PrabathPair();
-});
 
-process.on('uncaughtException', function (err) {
-    console.log('Caught exception: ' + err);
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+
+            if (connection === 'open') {
+                await delay(3000);
+
+                // Read creds.json to convert into Session ID
+                const credsFile = `${authPath}/creds.json`;
+                if (fs.existsSync(credsFile)) {
+                    const credsData = fs.readFileSync(credsFile, 'utf-8');
+                    // Base64 Encode to generate Session ID
+                    const sessionId = "Avi-Pair;;;" + Buffer.from(credsData).toString('base64');
+
+                    // Send Session ID to user's WhatsApp
+                    await sock.sendMessage(sock.user.id, { 
+                        text: `*Avi Pair Connected Successfully!* 🎉\n\n*YOUR SESSION ID:*\n\n${sessionId}\n\n_Keep this Session ID safe!_` 
+                    });
+
+                    // Send confirmation message
+                    await sock.sendMessage(sock.user.id, { text: `> Powered by Avi-Pair` });
+                }
+
+                // Clean up session folder after sending
+                await delay(2000);
+                await sock.ws.close();
+                fs.rmSync(authPath, { recursive: true, force: true });
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode !== 401) {
+                    // Retry connection if not logged out
+                } else {
+                    fs.rmSync(authPath, { recursive: true, force: true });
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error("Pairing Error:", err);
+        if (!res.headersSent) {
+            res.json({ error: "Service Unavailable" });
+        }
+        fs.rmSync(authPath, { recursive: true, force: true });
+    }
 });
 
 module.exports = router;
