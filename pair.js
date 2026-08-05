@@ -1,6 +1,6 @@
-const express = require('express');
-const router = express.Router();
-const fs = require('fs');
+const Express = require('express');
+const router = Express.Router();
+const fs = require('fs-extra');
 const pino = require('pino');
 const {
     default: makeWASocket,
@@ -8,84 +8,86 @@ const {
     delay,
     makeCacheableSignalKeyStore,
     Browsers
-} = require('@whiskeysockets/baileys');
+} = require("@whiskeysockets/baileys");
 
 router.get('/', async (req, res) => {
-    let num = req.query.code;
-    if (!num) return res.json({ error: 'Please enter a valid phone number!' });
+    let num = req.query.number;
 
-    // Phone number sanitization
+    if (!num) {
+        return res.status(400).send({ status: false, message: "Please provide a valid phone number with country code." });
+    }
+
+    // Cleaning the phone number (Only keep digits)
     num = num.replace(/[^0-9]/g, '');
 
-    const authPath = `./session_${Date.now()}`;
-    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    async function AviPairing() {
+        // Unique temporary session directory per request to prevent collision
+        const sessionPath = `./session_${Date.now()}`;
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-    try {
-        let sock = makeWASocket({
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
-            },
-            printQRInTerminal: false,
-            logger: pino({ level: "fatal" }),
-            browser: Browsers.macOS("Safari")
-        });
+        try {
+            let AviSession = makeWASocket({
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+                },
+                printQRInTerminal: false,
+                logger: pino({ level: "fatal" }),
+                // Using Desktop Safari/Chrome identity to guarantee direct pairing notifications
+                browser: Browsers.macOS("Safari")
+            });
 
-        if (!sock.authState.creds.registered) {
-            await delay(1500);
-            const code = await sock.requestPairingCode(num);
-            if (!res.headersSent) {
-                res.send({ code: code?.match(/.{1,4}/g)?.join("-") || code });
+            if (!AviSession.authState.creds.registered) {
+                await delay(2000); // Connection stabilization delay
+
+                // Request Pairing Code from WhatsApp Server
+                let code = await AviSession.requestPairingCode(num);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+
+                if (!res.headersSent) {
+                    res.send({ code: code });
+                }
             }
-        }
 
-        sock.ev.on('creds.update', saveCreds);
+            AviSession.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
+            AviSession.ev.on("connection.update", async (s) => {
+                const { connection, lastDisconnect } = s;
 
-            if (connection === 'open') {
-                await delay(3000);
+                if (connection === "open") {
+                    await delay(5000);
 
-                // Read creds.json to convert into Session ID
-                const credsFile = `${authPath}/creds.json`;
-                if (fs.existsSync(credsFile)) {
-                    const credsData = fs.readFileSync(credsFile, 'utf-8');
-                    // Base64 Encode to generate Session ID
-                    const sessionId = "Avi-Pair;;;" + Buffer.from(credsData).toString('base64');
-
-                    // Send Session ID to user's WhatsApp
-                    await sock.sendMessage(sock.user.id, { 
-                        text: `*Avi Pair Connected Successfully!* 🎉\n\n*YOUR SESSION ID:*\n\n${sessionId}\n\n_Keep this Session ID safe!_` 
+                    // Send success message to user's own chat
+                    await AviSession.sendMessage(AviSession.user.id, {
+                        text: "✅ *Avi-Pair Connected Successfully!*\n\n> Powered by Avishka"
                     });
 
-                    // Send confirmation message
-                    await sock.sendMessage(sock.user.id, { text: `> Powered by Avi-Pair` });
+                    await delay(2000);
+                    await AviSession.ws.close();
+                    await fs.remove(sessionPath); // Clean up session folder
                 }
 
-                // Clean up session folder after sending
-                await delay(2000);
-                await sock.ws.close();
-                fs.rmSync(authPath, { recursive: true, force: true });
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode !== 401) {
-                    // Retry connection if not logged out
-                } else {
-                    fs.rmSync(authPath, { recursive: true, force: true });
+                if (connection === "close") {
+                    let statusCode = lastDisconnect?.error?.output?.statusCode;
+                    if (statusCode !== 401) {
+                        // Reconnect if not logged out
+                        AviPairing();
+                    } else {
+                        await fs.remove(sessionPath);
+                    }
                 }
-            }
-        });
+            });
 
-    } catch (err) {
-        console.error("Pairing Error:", err);
-        if (!res.headersSent) {
-            res.json({ error: "Service Unavailable" });
+        } catch (err) {
+            console.error("Pairing Error:", err);
+            if (!res.headersSent) {
+                res.status(500).send({ error: "Failed to generate pairing code. Check number format." });
+            }
+            await fs.remove(sessionPath);
         }
-        fs.rmSync(authPath, { recursive: true, force: true });
     }
+
+    return await AviPairing();
 });
 
 module.exports = router;
