@@ -1,166 +1,150 @@
 const express = require('express');
-const path = require('path');
 const app = express();
-const PORT = process.env.PORT || 8000;
+const path = require('path');
+const fs = require('fs-extra');
+const pino = require('pino');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    delay,
+    makeCacheableSignalKeyStore,
+    Browsers
+} = require('@whiskeysockets/baileys');
 
-// Import the pair router
-const pairRouter = require('./pair');
+const PORT = process.env.PORT || 8080;
 
-// Express Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routing for pairing mechanism
-app.use('/pair', pairRouter);
-
-// Homepage with Web UI to enter phone number directly
+// Express HTML Interface
 app.get('/', (req, res) => {
     res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Avi-Pair | WhatsApp Pairing Code</title>
-        <style>
-            * {
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            }
-            body {
-                background: #0f172a;
-                color: #f8fafc;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                padding: 20px;
-            }
-            .card {
-                background: #1e293b;
-                padding: 30px;
-                border-radius: 16px;
-                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-                width: 100%;
-                max-width: 420px;
-                text-align: center;
-                border: 1px solid #334155;
-            }
-            h2 {
-                color: #38bdf8;
-                margin-bottom: 8px;
-            }
-            p {
-                color: #94a3b8;
-                font-size: 14px;
-                margin-bottom: 24px;
-            }
-            input {
-                width: 100%;
-                padding: 14px;
-                border-radius: 8px;
-                border: 1px solid #475569;
-                background: #0f172a;
-                color: #fff;
-                font-size: 16px;
-                margin-bottom: 16px;
-                outline: none;
-                text-align: center;
-            }
-            input:focus {
-                border-color: #38bdf8;
-            }
-            button {
-                width: 100%;
-                padding: 14px;
-                border: none;
-                border-radius: 8px;
-                background: #0284c7;
-                color: white;
-                font-size: 16px;
-                font-weight: bold;
-                cursor: pointer;
-                transition: 0.3s;
-            }
-            button:hover {
-                background: #0369a1;
-            }
-            #result {
-                margin-top: 20px;
-                padding: 12px;
-                border-radius: 8px;
-                display: none;
-                font-weight: bold;
-                letter-spacing: 2px;
-                font-size: 20px;
-            }
-            .success {
-                background: #064e3b;
-                color: #34d399;
-                border: 1px solid #059669;
-            }
-            .error {
-                background: #7f1d1d;
-                color: #f87171;
-                border: 1px solid #dc2626;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h2>Avi-Pair Generator</h2>
-            <p>Enter your phone number with country code (e.g., 94771234567)</p>
-            <input type="text" id="number" placeholder="9477XXXXXXX" required />
-            <button onclick="getPairCode()" id="btn">Get Pairing Code</button>
-            <div id="result"></div>
-        </div>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>AVI Pair Code</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #0b141a; color: #e9edef; margin: 0; }
+                .card { background: #111b21; padding: 30px; border-radius: 16px; border: 1px solid #222d34; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; width: 340px; }
+                h2 { color: #00a884; margin-bottom: 5px; }
+                p { font-size: 13px; color: #8696a0; margin-bottom: 20px; }
+                input { width: 90%; padding: 12px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #2a3942; background: #202c33; color: white; font-size: 16px; text-align: center; outline: none; }
+                input:focus { border-color: #00a884; }
+                button { width: 97%; padding: 12px; border: none; background: #00a884; color: #111b21; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: 0.2s; }
+                button:hover { background: #06cf9c; }
+                #code { margin-top: 20px; font-size: 24px; font-weight: bold; color: #53bdeb; letter-spacing: 3px; min-height: 30px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>AVI PAIR CODE</h2>
+                <p>Enter your phone number with country code<br>Ex: 9477XXXXXXX</p>
+                <input type="text" id="number" placeholder="94771234567">
+                <button onclick="getCode()">GET CODE</button>
+                <div id="code"></div>
+            </div>
 
-        <script>
-            async function getPairCode() {
-                const num = document.getElementById('number').value.trim();
-                const btn = document.getElementById('btn');
-                const resDiv = document.getElementById('result');
-
-                if (!num) {
-                    alert('Please enter a valid phone number!');
-                    return;
-                }
-
-                btn.disabled = true;
-                btn.innerText = 'Generating Code...';
-                resDiv.style.display = 'none';
-
-                try {
-                    const response = await fetch('/pair?number=' + encodeURIComponent(num));
-                    const data = await response.json();
-
-                    if (data.code) {
-                        resDiv.className = 'success';
-                        resDiv.innerText = 'CODE: ' + data.code;
-                    } else {
-                        resDiv.className = 'error';
-                        resDiv.innerText = data.message || 'Error getting code!';
+            <script>
+                async function getCode() {
+                    const num = document.getElementById('number').value.trim();
+                    const codeDiv = document.getElementById('code');
+                    if(!num) return alert('Enter phone number!');
+                    
+                    codeDiv.style.color = '#53bdeb';
+                    codeDiv.innerText = 'Connecting...';
+                    
+                    try {
+                        const res = await fetch('/code?number=' + encodeURIComponent(num));
+                        const data = await res.json();
+                        if(data.code) {
+                            codeDiv.innerText = data.code;
+                        } else {
+                            codeDiv.style.color = '#ea4335';
+                            codeDiv.innerText = data.error || 'Failed!';
+                        }
+                    } catch(e) {
+                        codeDiv.style.color = '#ea4335';
+                        codeDiv.innerText = 'Server Error!';
                     }
-                } catch (err) {
-                    resDiv.className = 'error';
-                    resDiv.innerText = 'Server Error. Try again!';
-                } finally {
-                    resDiv.style.display = 'block';
-                    btn.disabled = false;
-                    btn.innerText = 'Get Pairing Code';
                 }
-            }
-        </script>
-    </body>
-    </html>
+            </script>
+        </body>
+        </html>
     `);
 });
 
-// Start the Express Server
+// Pair Code Endpoint
+app.get('/code', async (req, res) => {
+    let num = req.query.number;
+
+    if (!num) {
+        return res.status(400).send({ error: 'Phone number is required' });
+    }
+
+    // Number එකේ තියෙන සංකේත අයින් කිරීම
+    num = num.replace(/[^0-9]/g, '');
+
+    if (num.length < 10) {
+        return res.status(400).send({ error: 'Invalid phone number format' });
+    }
+
+    // Temp Auth Folder
+    const sessionDir = path.join(__dirname, './temp_session_' + Date.now());
+
+    try {
+        // MultiFileAuthState සෑදීම
+        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+
+        const sock = makeWASocket({
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' })),
+            },
+            printQRInTerminal: false,
+            logger: pino({ level: 'fatal' }),
+            // Ubuntu/Chrome signature එක යැවීමෙන් WhatsApp block වීම වළකී
+            browser: Browsers.ubuntu("Chrome")
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        if (!sock.authState.creds.registered) {
+            // Socket Handshake එකට තත්පර 3ක delay එකක්
+            await delay(3000);
+            
+            try {
+                let code = await sock.requestPairingCode(num);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+
+                if (!res.headersSent) {
+                    res.send({ code: code });
+                }
+            } catch (err) {
+                console.error("Pairing Error:", err);
+                if (!res.headersSent) {
+                    res.status(500).send({ error: 'WhatsApp blocked or code request failed' });
+                }
+            }
+        }
+
+        // 2 Minutes පසු Temp Folder එක auto-delete වීම
+        setTimeout(async () => {
+            try {
+                await sock.end();
+                await fs.remove(sessionDir);
+            } catch (e) {}
+        }, 120000);
+
+    } catch (error) {
+        console.error("Server Crash:", error);
+        if (!res.headersSent) {
+            res.status(500).send({ error: 'Internal Server Error' });
+        }
+    }
+});
+
 app.listen(PORT, () => {
-    console.log(`=================================`);
-    console.log(`🚀 Avi-Pair Server Running on Port: ${PORT}`);
-    console.log(`=================================`);
+    console.log(`AVI Pair Bot running on port ${PORT}`);
 });
