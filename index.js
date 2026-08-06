@@ -16,7 +16,6 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// active sockets මතකයේ තබා ගැනීමට global object එකක්
 const activeSockets = {};
 
 app.get('/', (req, res) => {
@@ -50,10 +49,12 @@ app.get('/pair', async (req, res) => {
         return res.status(400).send({ error: "Phone number is required." });
     }
 
+    // Number Format එක Clean කිරීම
     num = num.replace(/[^0-9]/g, '');
+
     const sessionDir = `./temp/${num}`;
 
-    // පැරණි session එකක් ඇත්නම් clear කිරීම
+    // කලින් තිබූ Active Socket/Session Clear කිරීම
     if (activeSockets[num]) {
         try {
             activeSockets[num].end();
@@ -72,7 +73,8 @@ app.get('/pair', async (req, res) => {
             },
             printQRInTerminal: false,
             logger: pino({ level: "fatal" }),
-            browser: Browsers.ubuntu("Chrome"),
+            // Direct Desktop Signature
+            browser: ["Chrome (Linux)", "Chrome", "110.0.5481.177"],
             markOnlineOnConnect: true,
             syncFullHistory: false,
             connectTimeoutMs: 60000,
@@ -81,7 +83,6 @@ app.get('/pair', async (req, res) => {
         });
 
         activeSockets[num] = socket;
-
         socket.ev.on('creds.update', saveCreds);
 
         socket.ev.on('connection.update', async (update) => {
@@ -89,8 +90,7 @@ app.get('/pair', async (req, res) => {
 
             if (connection === 'open') {
                 console.log(`Successfully linked with ${num}`);
-                // Link වූ පසු creds save වී Phone එක Sync වීමට විනාඩියක් දෙන්න
-                await delay(60000);
+                await delay(30000);
                 delete activeSockets[num];
                 await fs.remove(sessionDir).catch(() => {});
             }
@@ -104,8 +104,8 @@ app.get('/pair', async (req, res) => {
             }
         });
 
-        // Connection එක setup වීමට තත්පර 3ක් ලබාදී Pair Code එක ගැනීම
-        await delay(3000);
+        // Connection එක Connect වීමට තත්පර 5ක් ලබා දී Pairing Request කිරීම
+        await delay(5000);
         if (!socket.authState.creds.registered) {
             const code = await socket.requestPairingCode(num);
             if (!res.headersSent) {
