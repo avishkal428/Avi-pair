@@ -15,6 +15,32 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Home Route (UI එක පෙන්වීමට - "Cannot GET /" නැති කිරීමට)
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Avi Pair Code</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: white; padding: 40px 20px; }
+                input { padding: 12px; font-size: 16px; border-radius: 5px; border: 1px solid #333; margin-bottom: 10px; width: 80%; max-width: 300px; }
+                button { padding: 12px 25px; font-size: 16px; border-radius: 5px; border: none; background: #25D366; color: white; cursor: pointer; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <h2>WhatsApp Pair Code Generator</h2>
+            <form action="/pair" method="get">
+                <input type="text" name="number" placeholder="947XXXXXXXX" required><br>
+                <button type="submit">Get Code</button>
+            </form>
+        </body>
+        </html>
+    `);
+});
+
+// Pairing Code Generator Endpoint
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
 
@@ -25,7 +51,6 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
     const sessionDir = `./temp/${Date.now()}`;
 
-    // සර්වර් එකේ පැරණි Temp Folders ඇත්නම් ඩිලීට් කිරීම
     await fs.emptyDir('./temp').catch(() => {});
 
     try {
@@ -38,7 +63,6 @@ app.get('/pair', async (req, res) => {
             },
             printQRInTerminal: false,
             logger: pino({ level: "fatal" }),
-            // Chrome Desktop User-Agent එක භාවිතයෙන් WhatsApp Block වීම වැළැක්වීම
             browser: Browsers.macOS("Chrome"),
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
@@ -58,16 +82,9 @@ app.get('/pair', async (req, res) => {
         }
 
         socket.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-            
-            if (connection === 'open') {
-                console.log("Successfully Linked!");
-                // Link වූ පසු WhatsApp එකෙන් Session ID එක Phone එකට යැවීමට හෝ temporary files අස් කිරීමට මෙතැන භාවිතා කළ හැක
-                await delay(10000);
-                await fs.remove(sessionDir).catch(() => {});
-            }
-
-            if (connection === 'close') {
+            const { connection } = update;
+            if (connection === 'open' || connection === 'close') {
+                await delay(3000);
                 await fs.remove(sessionDir).catch(() => {});
             }
         });
@@ -81,4 +98,6 @@ app.get('/pair', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
