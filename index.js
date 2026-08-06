@@ -60,29 +60,25 @@ app.get('/pair', async (req, res) => {
             },
             printQRInTerminal: false,
             logger: pino({ level: "fatal" }),
-            browser: Browsers.ubuntu("Chrome"),
-            markOnlineOnConnect: false,
+            browser: Browsers.macOS("Desktop"),
+            markOnlineOnConnect: true,
             syncFullHistory: false
         });
 
         socket.ev.on('creds.update', saveCreds);
 
-        // Socket එක WebSocket එක හරහා සම්පූර්ණයෙන්ම Connect වෙනකම් තත්පර 3ක් ඉන්නවා
-        if (!socket.authState.creds.registered) {
-            await delay(3000);
-            const code = await socket.requestPairingCode(num);
-            if (!res.headersSent) {
-                res.send({ code: code });
-            }
-        }
-
+        // Connection එක සම්පූර්ණයෙන්ම Open වන තෙක් බල සිටීම
         socket.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
-            
+
+            if (connection === 'connecting') {
+                console.log("Connecting...");
+            }
+
             if (connection === 'open') {
-                console.log("Successfully Connected & Linked!");
-                // Link වූ පසු creds save වීමට සහ Sync වීමට කාලය ලබා දී session clear කිරීම
-                await delay(15000);
+                console.log("Connected Successfully!");
+                // WhatsApp එකෙන් Session එක Phone එකට Fully Sync වීමට තත්පර 20ක් ලබා දීම
+                await delay(20000);
                 await fs.remove(sessionDir).catch(() => {});
             }
 
@@ -94,6 +90,15 @@ app.get('/pair', async (req, res) => {
             }
         });
 
+        // Socket initialize වී තත්පර 3කට පසු Pairing code එක Request කිරීම
+        await delay(3000);
+        if (!socket.authState.creds.registered) {
+            const code = await socket.requestPairingCode(num);
+            if (!res.headersSent) {
+                res.send({ code: code });
+            }
+        }
+
     } catch (err) {
         console.error(err);
         if (!res.headersSent) {
@@ -103,6 +108,4 @@ app.get('/pair', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
