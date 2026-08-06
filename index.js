@@ -16,8 +16,6 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const activeSockets = {};
-
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -49,19 +47,8 @@ app.get('/pair', async (req, res) => {
         return res.status(400).send({ error: "Phone number is required." });
     }
 
-    // Number Format එක Clean කිරීම
     num = num.replace(/[^0-9]/g, '');
-
-    const sessionDir = `./temp/${num}`;
-
-    // කලින් තිබූ Active Socket/Session Clear කිරීම
-    if (activeSockets[num]) {
-        try {
-            activeSockets[num].end();
-        } catch (e) {}
-        delete activeSockets[num];
-    }
-    await fs.remove(sessionDir).catch(() => {});
+    const sessionDir = `./temp/${Date.now()}`;
 
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -73,44 +60,53 @@ app.get('/pair', async (req, res) => {
             },
             printQRInTerminal: false,
             logger: pino({ level: "fatal" }),
-            // Direct Desktop Signature
-            browser: ["Chrome (Linux)", "Chrome", "110.0.5481.177"],
+            browser: Browsers.ubuntu("Chrome"),
             markOnlineOnConnect: true,
-            syncFullHistory: false,
-            connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000
+            syncFullHistory: false
         });
 
-        activeSockets[num] = socket;
         socket.ev.on('creds.update', saveCreds);
 
+        // Session connection state listener
         socket.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
-                console.log(`Successfully linked with ${num}`);
-                await delay(30000);
-                delete activeSockets[num];
+                console.log(`Device linked successfully for ${num}`);
+                await delay(20000); // Pair වූ පසු credentials save වීමට තත්පර 20ක් ලබාදෙයි
                 await fs.remove(sessionDir).catch(() => {});
             }
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode === DisconnectReason.loggedOut) {
-                    delete activeSockets[num];
                     await fs.remove(sessionDir).catch(() => {});
                 }
             }
         });
 
-        // Connection එක Connect වීමට තත්පර 5ක් ලබා දී Pairing Request කිරීම
-        await delay(5000);
-        if (!socket.authState.creds.registered) {
-            const code = await socket.requestPairingCode(num);
-            if (!res.headersSent) {
-                res.send({ code: code });
-            }
+        // Promise එකක් හරහා socket ready වූ වහාම code එක request කර response යැවීම
+        const getPairingCode = () => {
+            return new Promise(async (resolve, reject) => {
+                let attempts = 0;
+                while (attempts < 10) {
+                    await delay(1500);
+                    if (!socket.authState.creds.registered) {
+                        try {
+                            const code = await socket.requestPairingCode(num);
+                            return resolve(code);
+                        } catch (e) {
+                            attempts++;
+                        }
+                    }
+                }
+                reject("Failed to generate code in time");
+            });
+        };
+
+        const code = await getPairingCode();
+        if (!res.headersSent) {
+            res.send({ code: code });
         }
 
     } catch (err) {
