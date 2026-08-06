@@ -1,105 +1,35 @@
 const express = require('express');
 const app = express();
-const fs = require('fs-extra');
-const pino = require('pino');
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    delay,
-    makeCacheableSignalKeyStore,
-    Browsers,
-    DisconnectReason
-} = require('@whiskeysockets/baileys');
 
+// Heroku විසින් ලබාදෙන Dynamic Port එක භාවිතා කිරීම අනිවාර්ය වේ
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
+// Basic Route
 app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Avi Pair Code</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: white; padding: 40px 20px; }
-                input { padding: 12px; font-size: 16px; border-radius: 5px; border: 1px solid #333; margin-bottom: 10px; width: 80%; max-width: 300px; }
-                button { padding: 12px 25px; font-size: 16px; border-radius: 5px; border: none; background: #25D366; color: white; cursor: pointer; font-weight: bold; }
-            </style>
-        </head>
-        <body>
-            <h2>WhatsApp Pair Code Generator</h2>
-            <form action="/pair" method="get">
-                <input type="text" name="number" placeholder="947XXXXXXXX" required><br>
-                <button type="submit">Get Code</button>
-            </form>
-        </body>
-        </html>
-    `);
+    res.send('Server is running successfully!');
 });
 
-app.get('/pair', async (req, res) => {
-    let num = req.query.number;
-
-    if (!num) {
-        return res.status(400).send({ error: "Phone number is required." });
+// Pair Code Route (ඔබගේ අවශ්‍යතාවය අනුව Function එක ලියන්න)
+app.get('/pair', (req, res) => {
+    const number = req.query.number;
+    if (!number) {
+        return res.status(400).json({ error: 'Phone number is required' });
     }
-
-    num = num.replace(/[^0-9]/g, '');
-    const sessionDir = `./temp/${Date.now()}`;
-
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
-        const socket = makeWASocket({
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
-            },
-            printQRInTerminal: false,
-            logger: pino({ level: "fatal" }),
-            browser: ["Ubuntu", "Chrome", "20.0.04"],
-            markOnlineOnConnect: false,
-            syncFullHistory: false
-        });
-
-        socket.ev.on('creds.update', saveCreds);
-
-        socket.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-
-            if (connection === 'open') {
-                console.log(`Successfully linked with ${num}`);
-                await delay(10000);
-                await fs.remove(sessionDir).catch(() => {});
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode === DisconnectReason.loggedOut) {
-                    await fs.remove(sessionDir).catch(() => {});
-                }
-            }
-        });
-
-        // Connection එක Stabilize වීමට තත්පර 3ක් දී Code එක Request කිරීම
-        await delay(3000);
-        if (!socket.authState.creds.registered) {
-            const code = await socket.requestPairingCode(num);
-            if (!res.headersSent) {
-                return res.send({ code: code });
-            }
-        }
-
-    } catch (err) {
-        console.error(err);
-        if (!res.headersSent) {
-            res.status(500).send({ error: "Pairing process failed" });
-        }
-        await fs.remove(sessionDir).catch(() => {});
-    }
+    // මෙතැනට ඔබගේ Pairing Logic එක එකතු කරන්න
+    res.json({ message: `Pairing code requested for ${number}` });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Global Error Handler (App එක crash වීම වැළැක්වීමට)
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Rejection:', err);
+});
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
