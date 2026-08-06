@@ -16,6 +16,9 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// active sockets මතකයේ තබා ගැනීමට global object එකක්
+const activeSockets = {};
+
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -48,7 +51,16 @@ app.get('/pair', async (req, res) => {
     }
 
     num = num.replace(/[^0-9]/g, '');
-    const sessionDir = `./temp/${Date.now()}`;
+    const sessionDir = `./temp/${num}`;
+
+    // පැරණි session එකක් ඇත්නම් clear කිරීම
+    if (activeSockets[num]) {
+        try {
+            activeSockets[num].end();
+        } catch (e) {}
+        delete activeSockets[num];
+    }
+    await fs.remove(sessionDir).catch(() => {});
 
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -60,37 +72,39 @@ app.get('/pair', async (req, res) => {
             },
             printQRInTerminal: false,
             logger: pino({ level: "fatal" }),
-            browser: Browsers.macOS("Desktop"),
+            browser: Browsers.ubuntu("Chrome"),
             markOnlineOnConnect: true,
-            syncFullHistory: false
+            syncFullHistory: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 10000
         });
+
+        activeSockets[num] = socket;
 
         socket.ev.on('creds.update', saveCreds);
 
-        // Connection එක සම්පූර්ණයෙන්ම Open වන තෙක් බල සිටීම
         socket.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
-            if (connection === 'connecting') {
-                console.log("Connecting...");
-            }
-
             if (connection === 'open') {
-                console.log("Connected Successfully!");
-                // WhatsApp එකෙන් Session එක Phone එකට Fully Sync වීමට තත්පර 20ක් ලබා දීම
-                await delay(20000);
+                console.log(`Successfully linked with ${num}`);
+                // Link වූ පසු creds save වී Phone එක Sync වීමට විනාඩියක් දෙන්න
+                await delay(60000);
+                delete activeSockets[num];
                 await fs.remove(sessionDir).catch(() => {});
             }
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode === DisconnectReason.loggedOut) {
+                    delete activeSockets[num];
                     await fs.remove(sessionDir).catch(() => {});
                 }
             }
         });
 
-        // Socket initialize වී තත්පර 3කට පසු Pairing code එක Request කිරීම
+        // Connection එක setup වීමට තත්පර 3ක් ලබාදී Pair Code එක ගැනීම
         await delay(3000);
         if (!socket.authState.creds.registered) {
             const code = await socket.requestPairingCode(num);
