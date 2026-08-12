@@ -1,7 +1,7 @@
 {
   "name": "lkshan-md-bot",
   "version": "1.0.0",
-  "description": "WhatsApp Bot with Mega Pairing Code",
+  "description": "WhatsApp Bot Project",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,6 +11,7 @@
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "fs-extra": "^11.2.0",
     "megajs": "^1.3.5",
     "pino": "^9.6.0",
     "unzipper": "^0.12.3"
