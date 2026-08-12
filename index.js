@@ -21,10 +21,10 @@ app.use(cors());
 const BOT_NAME = process.env.BOT_NAME || 'LKSHAN-MD';
 const OWNER_NUMBER = process.env.OWNER_NUMBER || '94724098953';
 
-let sock;
+let sock = null;
 const AUTH_DIR = path.join(__dirname, 'auth_info');
 
-// 📤 Send Direct Session ID to Inbox & Instant Offline Disconnect
+// 📤 Send Session ID to Inbox and Disconnect (Go Offline)
 async function sendSessionIdAndDisconnect(userJid) {
     try {
         const credsFilePath = path.join(AUTH_DIR, 'creds.json');
@@ -42,10 +42,10 @@ async function sendSessionIdAndDisconnect(userJid) {
                                `\`\`\`${generatedSessionId}\`\`\`\n\n` +
                                `📌 *Heroku Config Vars (Main Bot):* \n` +
                                `Key: \`SESSION_ID\`\n` +
-                               `Value: (ඉහළ ඇති මුළු Session ID එකම කොපි කරලා Paste කරන්න)\n\n` +
+                               `Value: (උඩ තියෙන මුළු Session ID එකම කොපි කරලා Paste කරන්න)\n\n` +
                                `⚠️ *Note:* Pair Site එක මේ වන විට Offline වී ඇත!`;
 
-            // 1. User Inbox එකට Session ID යැවීම
+            // 1. Inbox එකට Session ID එක යැවීම
             await sock.sendMessage(userJid, { text: sessionMsg });
 
             // 2. Owner Number එකක් ඇත්නම් ඒකටත් Copy එකක් යැවීම
@@ -56,27 +56,30 @@ async function sendSessionIdAndDisconnect(userJid) {
                 }
             }
 
-            console.log(`✅ Session ID sent successfully to: ${userJid}`);
+            console.log(`✅ Session ID sent successfully to Inbox: ${userJid}`);
 
-            // 🛑 Session යැවූ පසු Connection එක වසා දමා Offline වීම
+            // 🛑 Message එක යැවූ පසු Connection එක Disconnect කර Offline කිරීම
             await delay(3000);
-            console.log('🛑 Closing socket and cleaning temporary session...');
-            
+            console.log('🛑 Closing socket & Disconnecting Pairing Site...');
+
             if (sock) {
                 await sock.ws.close();
+                sock = null;
             }
+
+            // Temp auth directory එක delete කිරීම
             if (fs.existsSync(AUTH_DIR)) {
                 fs.rmSync(AUTH_DIR, { recursive: true, force: true });
             }
-            sock = null;
+
             console.log('🔴 Pairing Site is now completely OFFLINE!');
         }
     } catch (err) {
-        console.error('❌ Session ID Send Error:', err.message);
+        console.error('❌ Session Send Error:', err.message);
     }
 }
 
-// 🚀 Temporary Connection for Pairing
+// 🚀 Temporary Socket Connection for Pairing Only
 async function startPairingSocket() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -87,7 +90,7 @@ async function startPairingSocket() {
             logger: pino({ level: 'silent' }),
             auth: state,
             printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'),
+            browser: Browsers.ubuntu('Chrome'),
             connectTimeoutMs: 60000
         });
 
@@ -102,18 +105,18 @@ async function startPairingSocket() {
                     if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
                 }
             } else if (connection === 'open') {
-                console.log(`🟢 Temporary Connection Established! Sending Session...`);
+                console.log(`🟢 Pair Connection Established! Sending Session ID...`);
 
                 const rawUserJid = sock.user.id.split(':')[0];
                 const userJid = `${rawUserJid}@s.whatsapp.net`;
-                
+
                 await delay(2000);
                 await sendSessionIdAndDisconnect(userJid);
             }
         });
 
     } catch (err) {
-        console.error("❌ Socket Error:", err.message);
+        console.error("❌ Pair Socket Error:", err.message);
     }
 }
 
@@ -181,18 +184,21 @@ app.get('/pair', async (req, res) => {
         if (fs.existsSync(AUTH_DIR)) {
             fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         }
+
         await startPairingSocket();
         await delay(2000);
+
+        if (!sock) return res.status(500).json({ error: 'Socket initialization failed' });
 
         const code = await sock.requestPairingCode(num);
         return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
     } catch (err) {
-        console.error("Pairing Request Error:", err.message);
-        return res.status(500).json({ error: 'Pairing failed. Try again.' });
+        console.error("Pairing Error:", err.message);
+        return res.status(500).json({ error: 'Pairing failed' });
     }
 });
 
-// Start Express Web Server
+// Start Server (Does NOT start bot automatically on boot)
 app.listen(PORT, () => {
-    console.log(`🌐 Pairing Web Server active on port ${PORT}`);
+    console.log(`🌐 Pairing Site active on port ${PORT}`);
 });
